@@ -6,7 +6,7 @@ This project involves creating an ETL (Extract, Transform, Load) pipeline using 
 
 <img src="./images/ETL-Starter.jpg" 
            alt="Image Caption" 
-           style="border:1px solid white; padding:1px; background:#fff;" />
+           style="border:1px solid white; padding:1px; background:#fff;width: 2000px" />
 
 The project leverages Docker to run Airflow and Postgres as services, ensuring an isolated and reproducible environment. We also utilize Airflow hooks and operators to handle the ETL process efficiently.
 
