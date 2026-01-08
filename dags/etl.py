@@ -3,7 +3,7 @@ from airflow.providers.http.operators.http import HttpOperator
 from airflow.sdk import task
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 import pendulum
-from datetime import timedelta, date
+from datetime import timedelta
 
 ## Define the DAG
 with DAG(
