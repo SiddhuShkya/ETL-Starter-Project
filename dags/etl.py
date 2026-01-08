@@ -1,98 +1,98 @@
 from airflow import DAG
 from airflow.providers.http.operators.http import HttpOperator
-from airflow.decorators import task
+from airflow.sdk import task
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 import pendulum
-from datetime import timedelta
-import json
+from datetime import timedelta, date
 
 ## Define the DAG
 with DAG(
-    dag_id="NASA_APOD_Postgres",
-    start_date=pendulum.datetime(
-        2025, 1, 1, tz="UTC"
-    ),  # Best practice: Use a fixed past date
+    dag_id="NASA_DONKI_SolarFlare_Postgres",
+    start_date=pendulum.datetime(2025, 1, 1, tz="UTC"),
     schedule="@daily",
     catchup=False,
 ) as dag:
-    ## Step 1 : Create the table if it doesn't exist
+    ## Step 1: Create the Postgres table if it doesn't exist
     @task
     def create_postgres_table():
-        ## Initialize the Postgreshook
         postgres_hook = PostgresHook(postgres_conn_id="my_postgres_connection")
-        ## SQL query to create the table
+        # Create a fresh table
         create_table_query = """
-        CREATE TABLE IF NOT EXISTS nasa_apod_data (
-            id SERIAL_PRIMARY KEY,
-            title VARCHAR(255),
-            explanation TEXT,
-            url TEXT,
-            date DATE,
-            media_type VARCHAR(50)
+        CREATE TABLE IF NOT EXISTS solar_flare_data (
+            id SERIAL PRIMARY KEY,
+            flr_id VARCHAR(50) UNIQUE,
+            class_type VARCHAR(10),
+            begin_time TIMESTAMP,
+            peak_time TIMESTAMP,
+            end_time TIMESTAMP,
+            source_location VARCHAR(20),
+            active_region_num INT,
+            link TEXT
         );
         """
-        ## Executr the table creation query
         postgres_hook.run(create_table_query)
 
-    ## Step 2 : Extract the Nasa API data (APOD) - ASTRONOMY PICTURE OF THE DAY
-    extract_nasa_apod_data = HttpOperator(
-        task_id="extract_apod",
-        http_conn_id="nasa_api",  ## Connection id defined in airflow for NASA API
-        endpoint="planetary/apod",  ## NASA API Endpoint for APOD
+    ## Step 2: Extract DONKI Solar Flare data
+    extract_solarflare_data = HttpOperator(
+        task_id="extract_solarflare",
+        http_conn_id="nasa_api",
+        endpoint="DONKI/FLR?api_key={{ conn.nasa_api.extra_dejson.api_key }}",
         method="GET",
-        params={
-            "api_key": "{{ conn.nasa_api.extra_dejson.api_key }}"
-        },  ## Use the api key from the connection
-        response_filter=lambda response: response.json(),  ## Convert response to json
+        response_filter=lambda response: response.json(),
         log_response=True,
         retries=3,
         retry_delay=timedelta(minutes=5),
     )
 
-    ## Step 3 : Transform the data (Pick the information that i need to save)
+    ## Step 3: Transform the data (keep only important fields)
     @task
-    def transform_apod_data(response):
-        # select only some necessary fields from the api data
-        apod_data = {
-            "title": response.get("title", ""),
-            "explanation": response.get("explanation", ""),
-            "url": response.get("url", ""),
-            "date": response.get("date", ""),
-            "media_type": response.get("media_type", ""),
-        }
-        return apod_data
+    def transform_flr_data(response):
+        transformed = []
+        for flare in response:
+            transformed.append(
+                {
+                    "flr_id": flare.get("flrID"),
+                    "class_type": flare.get("classType"),
+                    "begin_time": flare.get("beginTime"),
+                    "peak_time": flare.get("peakTime"),
+                    "end_time": flare.get("endTime"),
+                    "source_location": flare.get("sourceLocation"),
+                    "active_region_num": flare.get("activeRegionNum"),
+                    "link": flare.get("link"),
+                }
+            )
+        return transformed
 
-    ## Step 4 : Load the data into Postgres SQL
+    ## Step 4: Load data into Postgres
     @task
-    def load_data_postgres(apod_data):
-        ## Initialize the PostgresHook
+    def load_data_postgres(flare_data):
         postgres_hook = PostgresHook(postgres_conn_id="my_postgres_connection")
-        ## Define the SQL insert query
         insert_query = """
-        INSERT INTO apod_data (title, explanation, url, date, media_type) VALUES (%s, %s, %s, %s, %s);
+        INSERT INTO solar_flare_data 
+        (flr_id, class_type, begin_time, peak_time, end_time, source_location, active_region_num, link)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (flr_id) DO NOTHING;  -- prevent duplicates
         """
-        ## Execute the SQL Query
-        postgres_hook.run(
-            insert_query,
-            parameters=(
-                apod_data["title"],
-                apod_data["explanation"],
-                apod_data["url"],
-                apod_data["date"],
-                apod_data["media_type"],
-            ),
-        )
+        for flare in flare_data:
+            postgres_hook.run(
+                insert_query,
+                parameters=(
+                    flare["flr_id"],
+                    flare["class_type"],
+                    flare["begin_time"],
+                    flare["peak_time"],
+                    flare["end_time"],
+                    flare["source_location"],
+                    flare["active_region_num"],
+                    flare["link"],
+                ),
+            )
 
-    ## Step 5 : Verify the data DBViewer
-
-    ## Step 6 : Define the task dependencies
-
-    ## Extract
-    (
-        create_postgres_table() >> extract_nasa_apod_data
-    )  # Ensures the table is created before extraction
-    api_response = extract_nasa_apod_data.output
-    ## Transform
-    transformed_data = transform_apod_data(api_response)
-    ## Load
+    ## Step 5: Define task dependencies
+    # Extract
+    create_postgres_table() >> extract_solarflare_data
+    api_response = extract_solarflare_data.output
+    # Transform
+    transformed_data = transform_flr_data(api_response)
+    # Load
     load_data_postgres(transformed_data)
